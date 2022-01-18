@@ -1,84 +1,58 @@
 import { CRDT, crdtProtocol, Message } from "./crdt/index"
+import { isSyncComponent } from "./sync-component"
 export { Message }
 
-export interface SyncComponent<T = unknown> {
-  put(state: T): void
-  getSyncData(): string
-  dirty?: boolean
-}
-
-declare var Symbol: any
-
-export const isSyncComponent = (component: unknown): component is SynchronizableObservableComponent =>
-  component instanceof SynchronizableObservableComponent
-
-export class SynchronizableObservableComponent extends ObservableComponent implements SyncComponent<any> {
-  dirty?: boolean
-  data: any
-  put(serialized: string): void {
-    this.data = this.data || {}
-    const state = JSON.parse(serialized)
-    for (let key in state) {
-      this.data[key] = state[key]
+/**
+ * Message helpers
+ */
+function parseData(value: any): Message<Uint8Array> | void {
+  try {
+    const msg = JSON.parse(value) as Message<Record<string, number>>
+    const buff = Object.keys(msg.data).map(k => msg.data[k])
+    const data = new Uint8Array(buff)
+    return {
+      key: msg.key,
+      timestamp: msg.timestamp,
+      data
     }
-    this.dirty = false
-  }
-  getSyncData(): string {
-    return JSON.stringify(this.data)
-  }
+  } catch (_e) {}
+  return
 }
+
+function getKey(entityUUID: string, componentName: string) {
+  return `${entityUUID}.${componentName}`
+}
+
+function parseKey(message: Message<Uint8Array>): [string, string] {
+  return message.key.split(".").slice(0, 2) as [string, string]
+}
+
 
 /**
- * 1. Cambio local, state="a", dirty=true
- * 2. Llega mensaje nuevo state="b", aplico put local, state="b", dirty=false
+ * CRDT System
  */
-
 export class CRDTSystem implements ISystem {
-  cachedComponents: Record<string, Record<string, string> | undefined> = {}
-  engine!: Engine
-  crdt: CRDT<string>
-  ws: WebSocket
+  private cachedComponents: Record<string, Record<string, boolean> | undefined> = {}
+  private engine!: Engine
+  private crdt: CRDT<Uint8Array>
+  private ws: WebSocket
 
   constructor(wsUrl: string) {
     this.ws = new WebSocket(wsUrl)
     this.ws.onmessage = (event) => {
-      this.processMessage(JSON.parse(event.data))
+      const message = parseData(event.data)
+      if (!message) return
+      this.processMessage(message)
     }
-    this.crdt = crdtProtocol<string>(async (message) => {
+    this.crdt = crdtProtocol<Uint8Array>(async (message) => {
       this.ws.send(JSON.stringify(message))
-    }, "client" + ((Math.random() * 100) | 0).toString())
+    }, "UUID:" + ((Math.random() * 100) | 0).toString())
   }
 
   activate(engine: Engine) {
     this.engine = engine
     engine.eventManager.addListener(ComponentAdded, this, this.componentAdded)
     engine.eventManager.addListener(ComponentRemoved, this, this.componentRemoved)
-  }
-
-  private componentRemoved(event: ComponentRemoved) {
-    if (this.cachedComponents[event.entity.uuid]) {
-      delete this.cachedComponents[event.entity.uuid]![event.componentName]
-    }
-  }
-
-  private componentAdded(event: ComponentAdded) {
-    if (event.entity.isAddedToEngine()) {
-      const component = event.entity.components[event.componentName]
-
-      if (!isSyncComponent(component)) {
-        return
-      }
-
-      if (!this.cachedComponents[event.entity.uuid]) {
-        this.cachedComponents[event.entity.uuid] = {}
-      }
-
-      this.cachedComponents[event.entity.uuid]![event.componentName] = component.getSyncData()
-    }
-  }
-
-  update(dt: number) {
-    this.syncComponents(dt)
   }
 
   onAddEntity(entity: Entity) {
@@ -89,11 +63,18 @@ export class CRDTSystem implements ISystem {
         continue
       }
 
-      if (!this.cachedComponents[entity.uuid]) {
-        this.cachedComponents[entity.uuid] = {}
-      }
+      this.setCacheComponent(entity.uuid, componentName)
+    }
+  }
 
-      this.cachedComponents[entity.uuid]![componentName] = component.getSyncData()
+  private componentAdded(event: ComponentAdded) {
+    if (event.entity.isAddedToEngine()) {
+      const component = event.entity.components[event.componentName]
+
+      if (!isSyncComponent(component)) {
+        return
+      }
+      this.setCacheComponent(event.entity.uuid, event.componentName)
     }
   }
 
@@ -101,52 +82,49 @@ export class CRDTSystem implements ISystem {
     delete this.cachedComponents[entity.uuid]
   }
 
-  async processMessage(message: Message<string>) {
-    await this.crdt.processMessage(message)
-    const value = this.crdt.getState()[message.key]
-    const [entityUUID, componentName] = this.parseKey(message)
-
-    if (value?.data && value.data !== this.cachedComponents[entityUUID]![componentName]) {
-      const component = this.engine.entities[entityUUID].components[componentName]
-
-      if (isSyncComponent(component)) {
-        this.cachedComponents[entityUUID]![componentName] = value.data
-        component.put(value.data)
-      }
+  private componentRemoved(event: ComponentRemoved) {
+    if (this.cachedComponents[event.entity.uuid]) {
+      delete this.cachedComponents[event.entity.uuid]![event.componentName]
     }
   }
 
-  syncComponents(_dt: number) {
+  update(dt: number) {
+    this.syncComponents(dt)
+  }
+
+  private setCacheComponent(entityUUID: string, componentName: string) {
+    if (!this.cachedComponents[entityUUID]) {
+      this.cachedComponents[entityUUID] = {}
+    }
+
+    this.cachedComponents[entityUUID]![componentName] = true
+  }
+
+  private async processMessage(message: Message<Uint8Array>) {
+    const data = await this.crdt.processMessage(message)
+    const [entityUUID, componentName] = parseKey(message)
+    const component = this.engine.entities[entityUUID].components[componentName]
+
+    if (data && isSyncComponent(component)) {
+      component.put(data)
+    }
+  }
+
+  private syncComponents(_dt: number) {
     for (const entityUUID in this.cachedComponents) {
       const entity = this.cachedComponents[entityUUID]
       for (const componentName in entity) {
         const component = this.engine.entities[entityUUID].components[componentName]
 
-        if (!component || !isSyncComponent(component)) {
+        if (!component || !isSyncComponent(component) || !component.dirty) {
           continue
         }
 
-        if (component.dirty) {
-          const newVal = component.getSyncData()
-          const key = this.getKey(entityUUID, componentName)
-
-          if (!this.cachedComponents[entityUUID]) {
-            this.cachedComponents[entityUUID] = {}
-          }
-
-          this.cachedComponents[entityUUID]![componentName] = newVal
-          component.dirty = false
-          void this.crdt.sendMessage(this.crdt.createEvent(key, newVal))
-        }
+        const newVal = component.getSyncData()
+        const key = getKey(entityUUID, componentName)
+        component.dirty = false
+        void this.crdt.sendMessage(this.crdt.createEvent(key, newVal))
       }
     }
-  }
-
-  getKey(entityUUID: string, componentName: string) {
-    return `${entityUUID}.${componentName}`
-  }
-
-  parseKey(message: Message<string>): [string, string] {
-    return message.key.split(".").slice(0, 2) as [string, string]
   }
 }

@@ -5,10 +5,22 @@ export * from './types'
  * Compare raw data.
  * @internal
  */
-function sameData<T = unknown>(a: T, b: T) {
-  // if (a instanceof Buffer && b instanceof Buffer) {
-  //   return a.equals(b)
-  // }
+function sameData<T = unknown>(a: T, b: T): boolean {
+  if (a === b) return true
+
+  if (a instanceof Uint8Array && b instanceof Uint8Array) {
+    if (a.byteLength !== b.byteLength) {
+      return false
+    }
+
+    for(let i = 0; i < a.byteLength; i++) {
+      if (a[i] !== b[i]) {
+        return false
+      }
+    }
+    return true
+  }
+
   return a === b
 }
 
@@ -89,8 +101,7 @@ export function crdtProtocol<T>(
 
     // If the received timestamp is > than our current value, store it
     if (!current || current.timestamp < timestamp) {
-      updateState(key, data, timestamp)
-      return
+      return updateState(key, data, timestamp).data
     }
 
     // If our current timestamp is higher, then send the message
@@ -105,10 +116,10 @@ export function crdtProtocol<T>(
 
     // if both timestamps are equal, then we have a race condition.
     // We should compare the raw data and the higher one wins.
-    // We MUST increment the counter.
     function compareData(current: unknown, data: unknown) {
       return (current as number) > (data as number)
     }
+
     if (compareData(current.data, data)) {
       return sendMessage({
         key,
@@ -116,8 +127,7 @@ export function crdtProtocol<T>(
         timestamp: current.timestamp
       })
     }
-    updateState(key, data, timestamp)
-    return
+    return updateState(key, data, timestamp).data
   }
 
   /**

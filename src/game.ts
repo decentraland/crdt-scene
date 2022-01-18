@@ -1,9 +1,8 @@
-import { DoorOpenComponent } from "./sync-component"
+import { DoorOpenComponent } from "./door-component"
 import { CRDTSystem } from "./system"
 
-type Door = { open: boolean }
-
-engine.addSystem(new CRDTSystem("wss://test-sfu.decentraland.zone"))
+// engine.addSystem(new CRDTSystem("wss://test-sfu.decentraland.zone"))
+engine.addSystem(new CRDTSystem("ws://localhost:8080"))
 
 let openPos: Quaternion = Quaternion.Euler(0, 90, 0)
 let closedPos: Quaternion = Quaternion.Euler(0, 0, 0)
