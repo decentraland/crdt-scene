@@ -1,41 +1,35 @@
-interface SyncComponent<T = unknown> {
-  sync(state: T): void
-  getSyncData(): string
-  isSync: boolean
-  shouldSync: boolean
+export function textEncode(value: unknown): Uint8Array {
+  const stringValue = typeof value === 'string' ? value : JSON.stringify(value)
+  return new Uint8Array(stringValue.split('').map(c => c.charCodeAt(0)))
 }
 
-export const isSyncComponent = (component: unknown): component is (SyncComponent & ObservableComponent) =>
-  !!(component as SyncComponent).isSync
+export function textDecode(value: ArrayBufferLike): string {
+  return new Uint8Array(value).reduce((acc, char) => acc + String.fromCharCode(char), '');
+}
 
-@Component("syncstate")
-export class StateSyncComponent<K extends string, T = unknown> implements SyncComponent {
-  isSync: boolean = true
-  shouldSync: boolean = false
-  state: Record<K, T>
-  onChange: (state: Record<K, T>) => void
+export interface SyncComponent {
+  put(state: Uint8Array): void
+  getSyncData(): Uint8Array
+  dirty?: boolean
+}
 
-  constructor(state: Record<K, T>, onChange: (state: Record<K, T>) => void) {
-    this.state = state
-    this.onChange = onChange
+export const isSyncComponent = (component: unknown): component is SynchronizableObservableComponent =>
+  component instanceof SynchronizableObservableComponent
+
+export class SynchronizableObservableComponent extends ObservableComponent implements SyncComponent {
+  dirty?: boolean
+  data: any
+
+  put(serialized: Uint8Array): void {
+    this.data = this.data || {}
+    const state = JSON.parse(textDecode(serialized))
+    for (let key in state) {
+      this.data[key] = state[key]
+    }
+    this.dirty = false
   }
 
-  set(state: Record<K, T>) {
-    this.shouldSync = true
-    this.state = state
-    this.onChange(state)
-  }
-
-  get(key?: K) {
-    return key ? this.state[key] : this.state
-  }
-
-  sync(state: Record<K, T>) {
-    this.state = state
-    this.onChange(state)
-  }
-
-  getSyncData() {
-    return JSON.stringify(this.state)
+  getSyncData(): Uint8Array {
+    return textEncode(this.data)
   }
 }

@@ -36,7 +36,7 @@ export type SendUpdates<T = unknown> = (message: Message<T>) => Promise<void>
 export type CRDT<T = unknown> = {
   createEvent(key: string, data: T): Message<T>
   sendMessage(message: Message<T>): Promise<void>
-  processMessage(message: Message<T>): Promise<void>
+  processMessage(message: Message<T>): Promise<T | void>
   getState(): State<T>
   getUUID(): string
 }
