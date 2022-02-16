@@ -1,8 +1,7 @@
 import { DoorOpenComponent } from "./door-component"
 import { CRDTSystem } from "./system"
 
-// engine.addSystem(new CRDTSystem("wss://test-sfu.decentraland.zone"))
-engine.addSystem(new CRDTSystem("ws://localhost:8080"))
+engine.addSystem(new CRDTSystem("wss://sdk-ws.decentraland.io/ws"))
 
 let openPos: Quaternion = Quaternion.Euler(0, 90, 0)
 let closedPos: Quaternion = Quaternion.Euler(0, 0, 0)
